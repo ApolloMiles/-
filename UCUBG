@@ -121,7 +121,7 @@ double calT(vector<double>& density,vector<double>& variance,vector<double>& ave
             calUsedEnergy(usedenergy,n[i],cirnum);
         }
     }
-
+    
     for(int i=0;i<NUMNODE;++i) {
         if(averenergy[i]==0.0||deathNode[i]) T[i]=0.0;
         else T[i]=0.4*averenergy[i]+0.1*usedenergy[i]+0.3*(density[i]/Dmax)+0.1*(variance[i]/Smax)+0.1;
