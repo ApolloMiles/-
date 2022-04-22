@@ -1,0 +1,541 @@
+#include <iostream>
+#include <time.h>
+#include <vector>
+#include <math.h>
+#include <random>
+#include <map>
+#include <algorithm>
+#include <fstream>
+
+using namespace std;
+
+#define RADIUS 5        //通信半径
+#define SIDE 10         //边长
+#define NUMNODE 300     //节点数
+#define MAXE 200        //初始能量
+#define PAY 1           //消耗能量基数
+#define DISCOUNT 0.3    //融合数据，使能量消耗降低
+
+typedef struct Node {
+    int index;              //编号
+    int x,y,z;              //坐标
+    int maxEnergy;          //初始能量
+    int curEnergy;          //当前能量
+    int grade;              //簇首等级
+    vector<int> neighbors;  //邻居节点编号
+}node;
+
+node n[NUMNODE];
+node bs;
+map<int,bool> deathNode;
+int cirnum;
+
+void Init() {
+    srand((int)time(NULL));
+    map<int,int> avoidRepeat;
+    for(int i=0;i<NUMNODE;) {
+        int rnd=rand()%(SIDE*SIDE*SIDE);
+        if(avoidRepeat[rnd]) continue;
+        else {
+            avoidRepeat[rnd]=1;
+            n[i].index=i;
+            n[i].x=rnd/(SIDE*SIDE);//964->9
+            n[i].y=(rnd/SIDE)%SIDE;//964->6
+            n[i].z=rnd%SIDE;//964->4
+            n[i].maxEnergy=MAXE;
+            int m=MAXE*0.1;
+            n[i].curEnergy=0.9*MAXE+rnd%m;
+            ++i;
+        }
+    }
+    bs.x=SIDE/2;
+    bs.y=SIDE/2;
+    bs.z=SIDE+1;
+}
+void Show() {
+    //
+}
+
+int calDis(node& a,node& b) {//未开方
+    return (a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y)+(a.z-b.z)*(a.z-b.z);
+}
+void addNeighbors() {
+    for(int i=0;i<NUMNODE;++i) {
+        for(int j=0;j<NUMNODE;++j) {
+            if(i!=j) {
+                if(!deathNode[j]&&calDis(n[i],n[j])<=RADIUS*RADIUS) {
+                    n[i].neighbors.emplace_back(j);
+                }
+            }
+        }
+    }
+}
+void calDensity(vector<double>& density,node& a) {
+    double sum=0.0;
+    for(int i:a.neighbors) {
+        sum+=sqrt((double)calDis(a,n[i]));
+    }
+    int m=a.neighbors.size();
+    density[a.index]=sum==0.0?0.0:(double)((m*m)/sum);
+}
+void calVariance(vector<double>& variance,node& a) {
+    double sum=0.0;
+    for(int i:a.neighbors) {
+        sum+=(double)calDis(a,n[i]);
+    }
+    variance[a.index]=sum==0.0?0.0:sqrt((double)(sum/(NUMNODE-1)));
+}
+void calAverageEnergy(vector<double>& averenergy,node& a) {
+    double average=0.0;
+    if(a.neighbors.size()==0) averenergy[a.index]=average;
+    else {
+        for(int i:a.neighbors) {
+            average+=(double)(n[i].curEnergy);
+        }
+        average/=a.neighbors.size();
+
+        averenergy[a.index]=a.curEnergy<average?0.0:(a.curEnergy-average)/average;
+    }
+}
+void calUsedEnergy(vector<double>& usedenergy,node& a,int l) {
+    double average=0.0;
+    if(a.neighbors.size()==0||l==0) usedenergy[a.index]=average;
+    else {
+        for(int i:a.neighbors) {
+            average+=(double)(n[i].maxEnergy-n[i].curEnergy)/(double)l;
+        }
+        double fenzi=(double)(a.maxEnergy-a.curEnergy)/(double)l;
+        usedenergy[a.index]=fenzi*fenzi/average;
+    }
+}
+double calT(vector<double>& density,vector<double>& variance,vector<double>& averenergy,vector<double>& usedenergy,vector<double>& T) {
+    double Dmax=0.0,Smax=0.0;
+    for(int i=0;i<NUMNODE;++i) {
+        if(!deathNode[i]) {
+            calDensity(density,n[i]);
+            Dmax=max(Dmax,density[i]);
+            calVariance(variance,n[i]);
+            Smax=max(Smax,variance[i]);
+
+            calAverageEnergy(averenergy,n[i]);
+            calUsedEnergy(usedenergy,n[i],cirnum);
+        }
+    }
+
+    for(int i=0;i<NUMNODE;++i) {
+        if(averenergy[i]==0.0||deathNode[i]) T[i]=0.0;
+        else T[i]=0.4*averenergy[i]+0.1*usedenergy[i]+0.3*(density[i]/Dmax)+0.1*(variance[i]/Smax)+0.1;
+        //cout <<"节点" << i << "适应值:" << T[i] <<endl;
+    }
+    return Dmax;
+}
+double calT1(vector<double>& density,vector<double>& variance,vector<double>& averenergy,vector<double>& usedenergy,vector<double>& T) {
+    double Dmax=0.0,Smax=0.0;
+    for(int i=0;i<NUMNODE;++i) {
+        if(!deathNode[i]) {
+            calDensity(density,n[i]);
+            Dmax=max(Dmax,density[i]);
+            calVariance(variance,n[i]);
+            Smax=max(Smax,variance[i]);
+
+            calAverageEnergy(averenergy,n[i]);
+            calUsedEnergy(usedenergy,n[i],cirnum);
+        }
+    }
+
+    for(int i=0;i<NUMNODE;++i) {
+        if(averenergy[i]==0.0||deathNode[i]) T[i]=0.0;
+        else T[i]=0.4*averenergy[i]+0.3*(density[i]/Dmax)+0.3;
+        //cout <<"节点" << i << "适应值:" << T[i] <<endl;
+    }
+    return Dmax;
+}
+
+void selectCandidate(vector<double>& T,map<int,int>& candidate) {
+    srand((int)time(NULL));
+    for(int i=0;i<T.size();++i) {
+        double u=rand()%NUMNODE/(double)(NUMNODE+1);
+        if(u<T[i]) candidate[i]=i;
+    }
+}
+void comfirmCH(vector<double>& Rc,map<int,int>& candidate,map<int,int>& clusterHeads) {
+    vector<int> cluster;
+    for(auto it=candidate.begin();it!=candidate.end();++it) {
+        int x=it->second;
+        cluster.emplace_back(x);
+        for(int j=0;j<n[x].neighbors.size();++j) {
+            int p=n[x].neighbors[j];
+            if(candidate.find(p)!=candidate.end()) {
+                if(calDis(n[x],n[p])<max(Rc[x],Rc[p]))
+                    cluster.emplace_back(p);
+            }
+        }
+        sort(cluster.begin(),cluster.end(),[&](const int& a,const int& b){
+             return n[a].curEnergy>n[b].curEnergy;
+        });
+        int p=cluster[0];
+        if(clusterHeads.find(p)==clusterHeads.end()) {
+            clusterHeads[p]=p;
+        }
+        cluster.clear();
+    }
+}
+
+void rucu(map<int,vector<int>>& clusters,vector<int>& heads,double disPointToBsMin,double disPointToBsMax) {
+    for(int i=0;i<NUMNODE;++i) {
+        if(deathNode[i]) continue;
+        int minToHead=NUMNODE+1;
+        double minToHeadW=(double)INT_MAX;
+        for(int j=0;j<heads.size();++j) {
+            double tmp=0.4*sqrt((double)calDis(n[i],n[heads[j]]))/RADIUS-0.2*(disPointToBsMax-disPointToBsMin)/sqrt((double)calDis(bs,n[heads[j]]))-0.4*(n[heads[j]].curEnergy/n[heads[j]].maxEnergy);
+            if(minToHeadW>tmp) {
+                minToHeadW=tmp;
+                minToHead=heads[j];
+            }
+        }
+        //cout << minToHead << endl;
+        clusters[minToHead].emplace_back(i);
+    }
+}
+void rucu1(map<int,vector<int>>& clusters,vector<int>& heads,double disPointToBsMin,double disPointToBsMax) {
+    for(int i=0;i<NUMNODE;++i) {
+        if(deathNode[i]) continue;
+        int minToHead=NUMNODE+1;
+        double minToHeadW=(double)INT_MAX;
+        for(int j=0;j<heads.size();++j) {
+            double tmp=0.4*sqrt((double)calDis(n[i],n[heads[j]]))/RADIUS+0.2*sqrt((double)calDis(bs,n[heads[j]]))/(disPointToBsMax-disPointToBsMin)-0.4*(n[heads[j]].curEnergy/n[heads[j]].maxEnergy);
+            if(minToHeadW>tmp) {
+                minToHeadW=tmp;
+                minToHead=heads[j];
+            }
+        }
+        //cout << minToHead << endl;
+        clusters[minToHead].emplace_back(i);
+    }
+}
+
+int fenceng(vector<vector<int>>& grade,vector<int>& heads,map<int,vector<int>>& headNeigh,map<int,bool>& isVisit) {
+    for(int i=0;i<heads.size();++i) {
+        for(int j=0;j<heads.size();++j) {
+            if(sqrt((double)calDis(n[heads[i]],n[heads[j]]))<RADIUS)
+                headNeigh[heads[i]].emplace_back(heads[j]);
+        }
+    }
+
+    //cout << 61 << endl;
+    int numofgrade=0;
+    int x=0;//等级数，越大越低
+    grade[x].emplace_back(NUMNODE+1);x++;
+    int r=RADIUS;
+    if(heads.size()==0) return 0;
+    while(1) {
+        for(int i=0;i<heads.size();++i) {
+            int idx=heads[i];
+            if(sqrt((double)calDis(n[idx],bs))<r) {
+                n[idx].grade=x;
+                headNeigh[idx].emplace_back(NUMNODE+1);
+                grade[x].emplace_back(idx);
+                isVisit[idx]=true;
+                numofgrade++;
+            }
+        }
+        if(numofgrade==0) {
+            r+=RADIUS;
+        }
+        else break;
+    }
+    x++;//cout << 62 << endl;
+    while(1) {
+        int cnt=numofgrade;
+        for(int i=0;i<grade[x-1].size();++i) {
+            int idx=grade[x-1][i];
+            for(int j=0;j<headNeigh[idx].size();++j) {
+                int idx1=headNeigh[idx][j];
+                if(!isVisit[idx1]&&sqrt((double)calDis(n[idx1],n[idx]))<RADIUS) {
+                    n[idx1].grade=x;
+                    grade[x].emplace_back(idx1);
+                    isVisit[idx1]=true;
+                    numofgrade++;
+                }
+            }
+        }
+        x++;
+        if(cnt==numofgrade) break;
+    }
+    return x;
+}
+int fenceng1(vector<vector<int>>& grade,vector<int>& heads,
+            map<int,vector<int>>& headNeigh,map<int,bool>& isVisit,map<int,double>& newr) {
+    for(int i=0;i<heads.size();++i) {
+        for(int j=0;j<heads.size();++j) {
+            if(sqrt((double)calDis(n[heads[i]],n[heads[j]]))<RADIUS)
+                headNeigh[heads[i]].emplace_back(heads[j]);
+        }
+    }
+
+    //cout << 61 << endl;
+    int numofgrade=0;
+    int x=0;//等级数，越大越低
+    grade[x].emplace_back(NUMNODE+1);x++;
+    int r=RADIUS;
+    if(heads.size()==0) return 0;
+    while(1) {
+        for(int i=0;i<heads.size();++i) {
+            int idx=heads[i];
+            if(sqrt((double)calDis(n[idx],bs))<r) {
+                n[idx].grade=x;
+                headNeigh[idx].emplace_back(NUMNODE+1);
+                grade[x].emplace_back(idx);
+                isVisit[idx]=true;
+                numofgrade++;
+            }
+        }
+        if(numofgrade==0) {
+            r+=RADIUS;
+        }
+        else break;
+    }
+    x++;//cout << 62 << endl;
+    while(1) {
+        int cnt=numofgrade;
+        for(int i=0;i<grade[x-1].size();++i) {
+            int idx=grade[x-1][i];
+            for(int j=0;j<headNeigh[idx].size();++j) {
+                int idx1=headNeigh[idx][j];
+                if(!isVisit[idx1]&&sqrt((double)calDis(n[idx1],n[idx]))<newr[idx]) {
+                    n[idx1].grade=x;
+                    grade[x].emplace_back(idx1);
+                    isVisit[idx1]=true;
+                    numofgrade++;
+                }
+            }
+        }
+        x++;
+        if(cnt==numofgrade) break;
+    }
+    return x;
+}
+
+void tongxin(vector<vector<int>>& grade,map<int,vector<int>>& clusters,map<int,bool>& deathNode,
+             map<int,int>& headInfoNum,map<int,vector<int>>& headNeigh,int layer) {
+    for(auto it=clusters.begin();it!=clusters.end();++it) {
+        int headidx=it->first;
+        int num=0;//活节点数
+        if(!deathNode[headidx]) {
+            for(auto inner=it->second.begin();inner!=it->second.end();++inner) {
+                int curnode=*inner;
+                if(!deathNode[curnode]) {
+                    n[curnode].curEnergy-=PAY;
+                    if(n[curnode].curEnergy<=0) deathNode[curnode]=true;
+                    num++;
+                }
+            }
+            n[headidx].curEnergy-=num*PAY;
+            headInfoNum[headidx]=num;
+            if(n[headidx].curEnergy<=0) deathNode[headidx]=true;
+        }
+    }
+    //cout << 61 << endl;
+    //簇首间通信
+    //cout << layer << endl;
+    for(int i=layer;i>0;--i) {
+        for(int j=0;j<grade[i].size();++j) {
+            int idx=grade[i][j];
+            int minEng=0,minIdx=-1;
+            for(int z=0;z<headNeigh[idx].size();++z) {
+                int idx1=headNeigh[idx][z];
+                if(idx1==NUMNODE+1) {
+                    minIdx=NUMNODE+1;
+                    break;
+                }
+                else if(!deathNode[idx1]&&n[idx1].grade<n[idx].grade) {
+                    if(n[idx1].curEnergy>minEng) {
+                        minEng=n[idx1].curEnergy;
+                        minIdx=idx1;
+                    }
+                }
+            }
+            if(minIdx==-1) continue;
+            else if(minIdx!=NUMNODE+1) {
+                int engPay=headInfoNum[idx]*DISCOUNT;
+                n[minIdx].curEnergy-=engPay>1?engPay:1;
+                headInfoNum[minIdx]+=headInfoNum[idx];
+                if(n[minIdx].curEnergy<=0) deathNode[minIdx]=true;
+            }
+        }
+    }
+}
+
+int main()
+{
+    Init();
+    addNeighbors();
+    node n1[NUMNODE];
+    for(int i=0;i<NUMNODE;++i) {
+        n1[i].x=n[i].x;
+        n1[i].y=n[i].y;
+        n1[i].z=n[i].z;
+        n1[i].neighbors=n[i].neighbors;
+        n1[i].index=n[i].index;
+        n1[i].maxEnergy=n[i].maxEnergy;
+        n1[i].curEnergy=n[i].curEnergy;
+    }
+
+    cirnum=0;
+    int cishu=100;
+    vector<int> deathNum;
+    while(cishu--)
+    {
+        cirnum++;
+        vector<double> density(NUMNODE);
+        vector<double> variance(NUMNODE);
+        vector<double> averenergy(NUMNODE);
+        vector<double> usedenergy(NUMNODE);
+        vector<double> T(NUMNODE);//适应值
+        vector<double> Rc(NUMNODE);
+
+        //cout << 1 <<endl;
+        //计算适应值
+        double Dmax=calT(density,variance,averenergy,usedenergy,T);
+
+        //cout << 2 <<endl;
+        //挑选候选簇头及半径
+        double disPointToBsMin=(double)(INT_MAX);
+        double disPointToBsMax=0;
+        vector<double> disPointToBs(NUMNODE);
+        for(int i=0;i<NUMNODE;++i) {
+            disPointToBs[i]=sqrt((double)calDis(n[i],bs));
+            disPointToBsMin=min(disPointToBsMin,disPointToBs[i]);
+            disPointToBsMax=max(disPointToBsMax,disPointToBs[i]);
+        }
+
+        map<int,int> candidate;
+        selectCandidate(T,candidate);
+
+        for(auto it=candidate.begin();it!=candidate.end();++it) {
+            int i=it->second;
+            Rc[i]=1-0.4*density[i]/Dmax-0.6*(disPointToBsMax-disPointToBsMin)/calDis(n[i],bs);
+            Rc[i]*=RADIUS;
+            //cout <<"候选簇首" << i << "竞争半径:" << Rc[i] <<endl;
+        }
+
+        //cout << 3 <<endl;
+        //确定簇头
+        map<int,int> clusterHeads;
+        comfirmCH(Rc,candidate,clusterHeads);
+        vector<int> heads;
+        for(auto it=clusterHeads.begin();it!=clusterHeads.end();++it) {
+            //cout << it->second <<endl;
+            heads.emplace_back(it->second);
+        }
+
+        //cout << 4 <<endl;
+        //入簇
+        map<int,vector<int>> clusters;
+        rucu(clusters,heads,disPointToBsMin,disPointToBsMax);
+
+        //cout << 5 <<endl;
+        //分层
+        map<int,vector<int>> headNeigh;//簇首邻居节点
+        vector<vector<int>> grade(SIDE*2);
+        map<int,bool> isVisit;
+        map<int,double> newr;
+        for(int i=0;i<heads.size();++i) {
+            double r=1-0.5*sqrt((double)calDis(n[i],bs))/(disPointToBsMax-disPointToBsMin)-0.5*(n[heads[i]].maxEnergy-n[heads[i]].curEnergy)/n[heads[i]].maxEnergy;
+            newr[heads[i]]=r*RADIUS;
+        }
+        int layer=fenceng1(grade,heads,headNeigh,isVisit,newr);
+
+        //cout <<6 <<endl;
+        //通信能量消耗
+        map<int,int> headInfoNum;
+        tongxin(grade,clusters,deathNode,headInfoNum,headNeigh,layer);
+        int deaNum=0;
+        for(auto it=deathNode.begin();it!=deathNode.end();++it)
+            if(it->second==true)
+                deaNum++;
+
+        //cout <<cishu<<"死亡节点数:" << deathNum << endl;
+        deathNum.emplace_back(deaNum);
+    }
+
+    for(int i=0;i<NUMNODE;++i) {
+        n[i].x=n1[i].x;
+        n[i].y=n1[i].y;
+        n[i].z=n1[i].z;
+        n[i].neighbors=n1[i].neighbors;
+        n[i].index=n1[i].index;
+        n[i].maxEnergy=n1[i].maxEnergy;
+        n[i].curEnergy=n1[i].curEnergy;
+    }
+    for(auto it=deathNode.begin();it!=deathNode.end();++it) {
+        it->second=false;
+    }
+    cirnum=0;
+    cishu=100;
+    vector<int> deathNum1;
+    while(cishu--)
+    {
+        cirnum++;
+        vector<double> density(NUMNODE);
+        vector<double> variance(NUMNODE);
+        vector<double> averenergy(NUMNODE);
+        vector<double> usedenergy(NUMNODE);
+        vector<double> T(NUMNODE);//适应值
+        vector<double> Rc(NUMNODE);
+
+        double Dmax=calT(density,variance,averenergy,usedenergy,T);
+        double disPointToBsMin=(double)(INT_MAX);
+        double disPointToBsMax=0;
+        vector<double> disPointToBs(NUMNODE);
+        for(int i=0;i<NUMNODE;++i) {
+            disPointToBs[i]=sqrt((double)calDis(n[i],bs));
+            disPointToBsMin=min(disPointToBsMin,disPointToBs[i]);
+            disPointToBsMax=max(disPointToBsMax,disPointToBs[i]);
+        }
+        map<int,int> candidate;
+        selectCandidate(T,candidate);
+
+        for(auto it=candidate.begin();it!=candidate.end();++it) {
+            int i=it->second;
+            Rc[i]=1-0.4*density[i]/Dmax-0.6*(disPointToBsMax-sqrt((double)calDis(n[i],bs)))/(disPointToBsMax-disPointToBsMin);
+            Rc[i]*=RADIUS;
+        }
+
+        map<int,int> clusterHeads;
+        comfirmCH(Rc,candidate,clusterHeads);
+        vector<int> heads;
+        for(auto it=clusterHeads.begin();it!=clusterHeads.end();++it) {
+            heads.emplace_back(it->second);
+        }
+
+        map<int,vector<int>> clusters;
+        rucu1(clusters,heads,disPointToBsMin,disPointToBsMax);
+
+        map<int,vector<int>> headNeigh;
+        vector<vector<int>> grade(SIDE*2);
+        map<int,bool> isVisit;
+        map<int,double> newr;
+        for(int i=0;i<heads.size();++i) {
+            double r=1-0.5*sqrt((double)calDis(n[i],bs))/disPointToBsMax-0.5*(n[heads[i]].maxEnergy-n[heads[i]].curEnergy)/n[heads[i]].maxEnergy;
+            newr[heads[i]]=r*RADIUS;
+        }
+        int layer=fenceng1(grade,heads,headNeigh,isVisit,newr);
+
+        map<int,int> headInfoNum;
+        tongxin(grade,clusters,deathNode,headInfoNum,headNeigh,layer);
+
+        int deaNum=0;
+        for(auto it=deathNode.begin();it!=deathNode.end();++it)
+            if(it->second==true)
+                deaNum++;
+
+        deathNum1.emplace_back(deaNum);
+    }
+
+    for(int i=0;i<deathNum.size();++i)
+        cout << i <<"   "<<deathNum[i] << endl;
+    for(int i=0;i<deathNum1.size();++i)
+        cout << i <<"   "<<deathNum1[i] << endl;
+    return 0;
+}
